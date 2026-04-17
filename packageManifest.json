@@ -1,11 +1,11 @@
 {
     "packageName": "SOMA Smart Shades 3 (Zigbee) driver",
     "author": "uDevel",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "minimumHEVersion": "2.3.0",
     "dateReleased": "2026-04-16",
     "licenseFile": "https://raw.githubusercontent.com/uDevel/hubitat-soma-shades-3/main/LICENSE",
-    "releaseNotes": "1.0.0 — Initial public release. Full WindowShade + Battery + Refresh + Configure. True mid-travel opening/closing state, target-announcement suppression, ZCL Default Response decoding, configurable settle timeout, optional ZCL OperationalStatus (0x0017) support, tri-level logging.",
+    "releaseNotes": "1.1.0 — Add identify command (ZCL Identify cluster 0x0003) for disambiguating multiple SOMA shades. Ack decoder is now cluster-aware so Open (window covering) and Identify (identify cluster) acks no longer collide.\n\n1.0.0 — Initial public release. Full WindowShade + Battery + Refresh + Configure. True mid-travel opening/closing state, target-announcement suppression, ZCL Default Response decoding, configurable settle timeout, optional ZCL OperationalStatus (0x0017) support, tri-level logging.",
     "drivers": [
         {
             "id": "d2850a8d-bdd6-4b04-952c-b5756bcdfcb9",
@@ -13,7 +13,7 @@
             "namespace": "uDevel",
             "location": "https://raw.githubusercontent.com/uDevel/hubitat-soma-shades-3/main/soma-smart-shades-3.groovy",
             "required": true,
-            "version": "1.0.0"
+            "version": "1.1.0"
         }
     ]
 }

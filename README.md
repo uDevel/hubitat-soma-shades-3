@@ -21,6 +21,7 @@ On the device page, run **Get Info** and open **Logs**. If the `manufacturer` st
 - `stopPositionChange` — halt mid-travel
 - `setPosition(0–100)` — 0 = closed, 100 = open (Hubitat convention)
 - `startPositionChange("open"|"close")`
+- `identify(seconds=30)` — tell the motor to reveal itself (blink / buzz / jog — varies by firmware). Useful when multiple SOMA shades are paired. Default duration 30 s, range 1–255.
 - `refresh` — re-reads position and battery
 
 ## Motion tracking (opening / closing)
@@ -65,6 +66,7 @@ settled: position=0 shade=closed
 - Tilt is not exposed — roller shades don't have tilt.
 - Battery reports are slow (battery-powered end device). Give it up to an hour after pairing.
 - The motor does not expose a stall / motor-blocked attribute over Zigbee, so the driver cannot report jams. Stalls are handled internally by the motor firmware.
+- The `identify` command always ack's with `ack: Identify -> SUCCESS`, but the visible behavior (blink / buzz / jog) is firmware-dependent — some firmware revisions are silent. A silent ack still confirms the command reached the motor.
 
 ## Device spec
 

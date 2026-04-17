@@ -13,7 +13,7 @@
 
 import groovy.transform.Field
 
-@Field static final String DRIVER_VERSION = "1.0.0"
+@Field static final String DRIVER_VERSION = "1.1.0"
 
 @Field static final Integer CLUSTER_BASIC          = 0x0000
 @Field static final Integer CLUSTER_POWER          = 0x0001
@@ -28,6 +28,7 @@ import groovy.transform.Field
 @Field static final Integer CMD_CLOSE              = 0x01
 @Field static final Integer CMD_STOP               = 0x02
 @Field static final Integer CMD_GOTO_LIFT_PERCENT  = 0x05
+@Field static final Integer CMD_IDENTIFY           = 0x00
 
 @Field static final String  SOMA_ENDPOINT          = "0x0A"
 
@@ -47,6 +48,9 @@ metadata {
         capability "WindowShade"
 
         attribute "lastCheckin", "string"
+
+        command "identify", [[name: "seconds", type: "NUMBER",
+                              description: "Identify duration in seconds (1-255). Default 30."]]
 
         fingerprint profileId: "0104",
                     endpointId: "0A",
@@ -164,6 +168,16 @@ def startPositionChange(String direction) {
     return []
 }
 
+def identify(seconds = 30) {
+    Integer secs = clamp((seconds ?: 30) as Integer, 1, 255)
+    logInfo "identify(${secs}s)"
+    // IdentifyTime is uint16 little-endian; low byte + high byte (0 for values <= 255)
+    String payload = zigbee.convertToHexString(secs, 2) + "00"
+    return traceOut("identify", [
+        "he cmd 0x${device.deviceNetworkId} ${SOMA_ENDPOINT} 0x0003 ${CMD_IDENTIFY} {${payload}}"
+    ])
+}
+
 def setPosition(position) {
     Integer hubPos = clamp(position as Integer, 0, 100)
     Integer currentPos = (device.currentValue("position") ?: 0) as Integer
@@ -275,8 +289,15 @@ def parse(String description) {
         if (zclCmd == 0x0B && descMap.data) {
             Integer forCmd = Integer.parseInt(descMap.data[0], 16) & 0xFF
             Integer status = Integer.parseInt(descMap.data[1], 16) & 0xFF
-            String cmdName  = [(0x00): "Open", (0x01): "Close", (0x02): "Stop",
-                               (0x05): "GoToLiftPct"].get(forCmd, "0x${String.format('%02X', forCmd)}")
+            Integer respCluster = descMap.clusterInt ?:
+                    (descMap.clusterId ? Integer.parseInt(descMap.clusterId, 16) : null)
+            Map<Integer, Map<Integer, String>> cmdNames = [
+                (CLUSTER_WINDOW_COVER): [(0x00): "Open", (0x01): "Close",
+                                         (0x02): "Stop", (0x05): "GoToLiftPct"],
+                (CLUSTER_IDENTIFY):     [(0x00): "Identify"]
+            ]
+            String cmdName = cmdNames.get(respCluster, [:])
+                                     .get(forCmd, "0x${String.format('%02X', forCmd)}")
             String statusOk = status == 0x00 ? "SUCCESS" : "0x${String.format('%02X', status)}"
             logInfo "ack: ${cmdName} -> ${statusOk}"
             return
