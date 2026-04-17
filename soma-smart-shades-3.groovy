@@ -34,9 +34,9 @@ import groovy.transform.Field
 metadata {
     definition(
         name:      "SOMA Smart Shades 3",
-        namespace: "bchau",
-        author:    "bchau",
-        importUrl: ""
+        namespace: "uDevel",
+        author:    "uDevel",
+        importUrl: "https://raw.githubusercontent.com/uDevel/hubitat-soma-shades-3/main/soma-smart-shades-3.groovy"
     ) {
         capability "Actuator"
         capability "Battery"
@@ -83,8 +83,8 @@ metadata {
 
         input name: "batteryReportMinutes", type: "number",
               title: "Battery report interval (minutes)",
-              description: "Max time between battery reports.",
-              defaultValue: 60, range: "5..1440"
+              description: "Max time between battery reports. Must be \u2265 60 (device minimum is 1 hour).",
+              defaultValue: 60, range: "60..1440"
 
         input name: "settleSeconds", type: "number",
               title: "Motion settle timeout (seconds)",
@@ -166,10 +166,15 @@ def startPositionChange(String direction) {
 
 def setPosition(position) {
     Integer hubPos = clamp(position as Integer, 0, 100)
+    Integer currentPos = (device.currentValue("position") ?: 0) as Integer
+    if (hubPos == currentPos) {
+        logInfo "setPosition(${hubPos}) \u2014 already at target, no-op"
+        return []
+    }
+
     Integer zclPct = hubToZcl(hubPos)
     logInfo "setPosition(${hubPos}) -> ZCL ${zclPct}%"
 
-    Integer currentPos = (device.currentValue("position") ?: 0) as Integer
     state.motorMoving = true
     markCommandTarget(hubPos)
     sendEvent(name: "windowShade", value: hubPos > currentPos ? "opening" : "closing")
@@ -203,7 +208,9 @@ def refreshBatteryCmd() {
 
 def configure() {
     logInfo "configure()"
-    Integer batteryMaxSec = ((batteryReportMinutes ?: 60) as Integer) * 60
+    // Clamp defensively in case an older stored value predates the range widening.
+    Integer batteryMaxMin = clamp(((batteryReportMinutes ?: 60) as Integer), 60, 1440)
+    Integer batteryMaxSec = batteryMaxMin * 60
 
     List<String> cmds = []
 
