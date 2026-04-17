@@ -1,0 +1,13 @@
+{
+    "author": "uDevel",
+    "gitHubUrl": "https://github.com/uDevel",
+    "packages": [
+        {
+            "name": "SOMA Smart Shades 3 (Zigbee) driver",
+            "category": "Drivers",
+            "location": "https://raw.githubusercontent.com/uDevel/hubitat-soma-shades-3/main/packageManifest.json",
+            "description": "Hubitat Zigbee driver for the SOMA Smart Shades 3 roller shade motor (WazombiLabs SmartShades3). True mid-travel opening/closing state, target-announcement suppression, ZCL Default Response acks, battery reporting.",
+            "tags": ["Blinds & Shades", "Zigbee"]
+        }
+    ]
+}
