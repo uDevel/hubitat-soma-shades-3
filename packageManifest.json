@@ -1,11 +1,11 @@
 {
     "packageName": "SOMA Smart Shades 3 (Zigbee) driver",
     "author": "uDevel",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "minimumHEVersion": "2.3.0",
-    "dateReleased": "2026-04-16",
+    "dateReleased": "2026-06-09",
     "licenseFile": "https://raw.githubusercontent.com/uDevel/hubitat-soma-shades-3/main/LICENSE",
-    "releaseNotes": "1.1.0 — Add identify command (ZCL Identify cluster 0x0003) for disambiguating multiple SOMA shades. Ack decoder is now cluster-aware so Open (window covering) and Identify (identify cluster) acks no longer collide.\n\n1.0.0 — Initial public release. Full WindowShade + Battery + Refresh + Configure. True mid-travel opening/closing state, target-announcement suppression, ZCL Default Response decoding, configurable settle timeout, optional ZCL OperationalStatus (0x0017) support, tri-level logging.",
+    "releaseNotes": "1.2.0 — Commanded open/close/setPosition now finalize the moment the target position is reached, instead of waiting out the settle timer (the timer stays as the fallback for manual moves, stops, and stalls). New read-only motorSpeed attribute reporting the speed configured in the SOMA app (speed is not settable over Zigbee — writes are accepted but ignored by the motor), plus a readSettings diagnostics command. Removed the non-functional OperationalStatus (0x0017) path: that attribute is the ZCL Mode attribute, not operational status, and the device never reported it. Internal cleanup: hardcoded the open/closed tolerance (removed the two threshold preferences) and throttled lastCheckin to once per minute. No change to core open/close/position behavior.\n\n1.1.0 — Add identify command (ZCL Identify cluster 0x0003) for disambiguating multiple SOMA shades. Ack decoder is now cluster-aware so Open (window covering) and Identify (identify cluster) acks no longer collide.\n\n1.0.0 — Initial public release. Full WindowShade + Battery + Refresh + Configure. True mid-travel opening/closing state, target-announcement suppression, ZCL Default Response decoding, configurable settle timeout, optional ZCL OperationalStatus (0x0017) support, tri-level logging.",
     "drivers": [
         {
             "id": "d2850a8d-bdd6-4b04-952c-b5756bcdfcb9",
@@ -13,7 +13,7 @@
             "namespace": "uDevel",
             "location": "https://raw.githubusercontent.com/uDevel/hubitat-soma-shades-3/main/soma-smart-shades-3.groovy",
             "required": true,
-            "version": "1.1.0"
+            "version": "1.2.0"
         }
     ]
 }

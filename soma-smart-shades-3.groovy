@@ -13,7 +13,7 @@
 
 import groovy.transform.Field
 
-@Field static final String DRIVER_VERSION = "1.1.0"
+@Field static final String DRIVER_VERSION = "1.2.0"
 
 @Field static final Integer CLUSTER_BASIC          = 0x0000
 @Field static final Integer CLUSTER_POWER          = 0x0001
@@ -22,7 +22,7 @@ import groovy.transform.Field
 
 @Field static final Integer ATTR_BATTERY_PERCENT   = 0x0021
 @Field static final Integer ATTR_LIFT_PERCENT      = 0x0008
-@Field static final Integer ATTR_OPERATIONAL_STATUS = 0x0017
+@Field static final Integer ATTR_VELOCITY          = 0x0014
 
 @Field static final Integer CMD_OPEN               = 0x00
 @Field static final Integer CMD_CLOSE              = 0x01
@@ -31,6 +31,11 @@ import groovy.transform.Field
 @Field static final Integer CMD_IDENTIFY           = 0x00
 
 @Field static final String  SOMA_ENDPOINT          = "0x0A"
+
+// Open/closed classification tolerance. The motor is encoder-controlled and lands on
+// exact 0/100, so a 1% margin is plenty to absorb a rare off-by-one stop.
+@Field static final Integer CLOSED_AT_OR_BELOW      = 1
+@Field static final Integer OPEN_AT_OR_ABOVE        = 99
 
 metadata {
     definition(
@@ -48,9 +53,14 @@ metadata {
         capability "WindowShade"
 
         attribute "lastCheckin", "string"
+        attribute "motorSpeed", "number"
 
         command "identify", [[name: "seconds", type: "NUMBER",
                               description: "Identify duration in seconds (1-255). Default 30."]]
+
+        // Diagnostic: read the device-side Window Covering settings (speed/velocity, mode,
+        // limits, type) + battery voltage. Velocity (0x0014) updates the motorSpeed attribute.
+        command "readSettings"
 
         fingerprint profileId: "0104",
                     endpointId: "0A",
@@ -74,16 +84,6 @@ metadata {
               title: "Invert position",
               description: "Flip if fully open reports as closed or vice versa.",
               defaultValue: false
-
-        input name: "closedThreshold", type: "number",
-              title: "Closed threshold (%)",
-              description: "Hubitat position at or below this is reported as closed.",
-              defaultValue: 2, range: "0..20"
-
-        input name: "openThreshold", type: "number",
-              title: "Open threshold (%)",
-              description: "Hubitat position at or above this is reported as open.",
-              defaultValue: 98, range: "80..100"
 
         input name: "batteryReportMinutes", type: "number",
               title: "Battery report interval (minutes)",
@@ -129,6 +129,7 @@ def logsOff() {
 def open() {
     logInfo "open()"
     state.motorMoving = true
+    state.moveTarget = 100
     markCommandTarget(100)
     sendEvent(name: "windowShade", value: "opening")
     return traceOut("open", [
@@ -141,6 +142,7 @@ def open() {
 def close() {
     logInfo "close()"
     state.motorMoving = true
+    state.moveTarget = 0
     markCommandTarget(0)
     sendEvent(name: "windowShade", value: "closing")
     return traceOut("close", [
@@ -153,6 +155,7 @@ def close() {
 def stopPositionChange() {
     logInfo "stopPositionChange()"
     state.motorMoving = false
+    state.remove("moveTarget")   // halts at an arbitrary spot, not a target
     runIn(1, "settleWindowShade", [overwrite: true])
     return traceOut("stop", [
         "he cmd 0x${device.deviceNetworkId} ${SOMA_ENDPOINT} 0x0102 ${CMD_STOP} {}",
@@ -178,6 +181,29 @@ def identify(seconds = 30) {
     ])
 }
 
+// Diagnostic: read the device-side settings the device never reports unsolicited.
+// With Trace logging on, each response is a `parse map:` line; attributes without a
+// dedicated handler land in `unhandled:`. Velocity (0x0014) updates the motorSpeed attribute.
+def readSettings() {
+    logInfo "readSettings()"
+    String dni = device.deviceNetworkId
+    return traceOut("readSettings", [
+        "he rattr 0x${dni} ${SOMA_ENDPOINT} 0x0102 0x0000 {}",  // WindowCoveringType
+        "delay 200",
+        "he rattr 0x${dni} ${SOMA_ENDPOINT} 0x0102 0x0007 {}",  // ConfigStatus
+        "delay 200",
+        "he rattr 0x${dni} ${SOMA_ENDPOINT} 0x0102 0x0010 {}",  // InstalledOpenLimitLift
+        "delay 200",
+        "he rattr 0x${dni} ${SOMA_ENDPOINT} 0x0102 0x0011 {}",  // InstalledClosedLimitLift
+        "delay 200",
+        "he rattr 0x${dni} ${SOMA_ENDPOINT} 0x0102 0x0014 {}",  // Velocity (motor speed)
+        "delay 200",
+        "he rattr 0x${dni} ${SOMA_ENDPOINT} 0x0102 0x0017 {}",  // Mode
+        "delay 200",
+        "he rattr 0x${dni} ${SOMA_ENDPOINT} 0x0001 0x0020 {}"   // BatteryVoltage
+    ])
+}
+
 def setPosition(position) {
     Integer hubPos = clamp(position as Integer, 0, 100)
     Integer currentPos = (device.currentValue("position") ?: 0) as Integer
@@ -190,6 +216,7 @@ def setPosition(position) {
     logInfo "setPosition(${hubPos}) -> ZCL ${zclPct}%"
 
     state.motorMoving = true
+    state.moveTarget = hubPos
     markCommandTarget(hubPos)
     sendEvent(name: "windowShade", value: hubPos > currentPos ? "opening" : "closing")
 
@@ -235,13 +262,10 @@ def configure() {
     cmds += "delay 200"
 
     // Reporting: currentPositionLiftPercentage  (uint8, min 0s, max 1h, delta 1%)
+    // This is the device's CVC (continuous value change) attribute: it streams
+    // intermediate positions during travel, which is how motion is tracked.
     cmds += zigbee.configureReporting(CLUSTER_WINDOW_COVER, ATTR_LIFT_PERCENT,
             DataType.UINT8, 0, 3600, 1, [destEndpoint: 0x0A])
-
-    // Reporting: operational status  (bitmap8, min 0s, max 1h, any change)
-    // If the device doesn't support it, this fails silently — we fall back to position-diff inference.
-    cmds += zigbee.configureReporting(CLUSTER_WINDOW_COVER, ATTR_OPERATIONAL_STATUS,
-            DataType.BITMAP8, 0, 3600, 1, [destEndpoint: 0x0A])
 
     // Reporting: batteryPercentageRemaining  (uint8, min 1h, max configurable, delta 2 = 1%)
     cmds += zigbee.configureReporting(CLUSTER_POWER, ATTR_BATTERY_PERCENT,
@@ -251,9 +275,12 @@ def configure() {
     cmds += refreshPositionCmd()
     cmds += "delay 200"
     cmds += refreshBatteryCmd()
+    cmds += "delay 200"
+    // motorSpeed status (app-configured speed; read-only over Zigbee)
+    cmds += "he rattr 0x${device.deviceNetworkId} ${SOMA_ENDPOINT} 0x0102 0x0014 {}"
 
     sendEvent(name: "checkInterval", value: batteryMaxSec * 2 + 600,
-              displayed: false, data: [protocol: "zigbee", hubHardwareId: device.hub.hardwareID])
+              data: [protocol: "zigbee", hubHardwareId: device.hub.hardwareID])
 
     return traceOut("configure", cmds)
 }
@@ -263,7 +290,7 @@ def ping() { refresh() }
 // ---------- parse ----------
 
 def parse(String description) {
-    sendEvent(name: "lastCheckin", value: new Date().format("yyyy-MM-dd HH:mm:ss"), displayed: false)
+    updateLastCheckin()
 
     Map descMap = zigbee.parseDescriptionAsMap(description)
     traceMap(descMap)
@@ -309,8 +336,8 @@ def parse(String description) {
     if (cluster == CLUSTER_WINDOW_COVER && attr == ATTR_LIFT_PERCENT) {
         return handleLiftReport(descMap)
     }
-    if (cluster == CLUSTER_WINDOW_COVER && attr == ATTR_OPERATIONAL_STATUS) {
-        return handleOperationalStatus(descMap)
+    if (cluster == CLUSTER_WINDOW_COVER && attr == ATTR_VELOCITY) {
+        return handleVelocityReport(descMap)
     }
     if (cluster == CLUSTER_POWER && attr == ATTR_BATTERY_PERCENT) {
         return handleBatteryReport(descMap)
@@ -342,8 +369,8 @@ private handleLiftReport(Map descMap) {
 
     sendEvent(name: "position", value: hubPos, unit: "%")
 
-    // Infer motion from position deltas. If the device also reports operational status,
-    // that handler wins because it arrives first with a definitive moving/not-moving bit.
+    // Infer motion from position deltas. The Zigbee Window Covering cluster exposes no
+    // motion-status attribute, so the stream of position reports is the only motion signal.
     if (state.motorMoving != true) {
         if (hubPos > prev) {
             logInfo "moving: position=${hubPos} (opening, ZCL ${zclPct})"
@@ -360,44 +387,30 @@ private handleLiftReport(Map descMap) {
 
     state.lastPosition = hubPos
 
+    // A commanded move that has reached its target is done — finalize now instead of
+    // waiting out the settle timer. Uncommanded moves (no target), mid-travel stops, and
+    // stalls leave moveTarget unset/unmatched and fall through to the timer below.
+    if (state.moveTarget != null && hubPos == (state.moveTarget as Integer)) {
+        logInfo "reached target ${hubPos} — finalizing"
+        unschedule("settleWindowShade")
+        settleWindowShade()
+        return
+    }
+
     // Finalize open/closed/partial after the stream of reports stops.
     Integer settle = (settleSeconds ?: 3) as Integer
     runIn(settle, "settleWindowShade", [overwrite: true])
 }
 
-private handleOperationalStatus(Map descMap) {
-    if (descMap.value == null) return
-    Integer status = Integer.parseInt(descMap.value, 16) & 0xFF
-    // bits 2..3 describe lift motion: 0=stopped, 1=opening, 2=closing
-    Integer lift = (status >> 2) & 0x03
-
-    if (lift == 0) {
-        logInfo "operationalStatus=${String.format('0x%02X', status)} lift=stopped"
-        state.motorMoving = false
-        settleWindowShade()
-    } else if (lift == 1) {
-        logInfo "operationalStatus=${String.format('0x%02X', status)} lift=opening"
-        state.motorMoving = true
-        sendEvent(name: "windowShade", value: "opening")
-    } else if (lift == 2) {
-        logInfo "operationalStatus=${String.format('0x%02X', status)} lift=closing"
-        state.motorMoving = true
-        sendEvent(name: "windowShade", value: "closing")
-    } else {
-        logDebug "operationalStatus=${String.format('0x%02X', status)} lift=${lift} (reserved)"
-    }
-}
-
 def settleWindowShade() {
     state.motorMoving = false
+    state.remove("moveTarget")
     Integer hubPos = (device.currentValue("position") ?: 0) as Integer
-    Integer closeTh = (closedThreshold ?: 2) as Integer
-    Integer openTh  = (openThreshold  ?: 98) as Integer
 
     String shadeState
-    if (hubPos <= closeTh)      shadeState = "closed"
-    else if (hubPos >= openTh)  shadeState = "open"
-    else                        shadeState = "partially open"
+    if (hubPos <= CLOSED_AT_OR_BELOW)     shadeState = "closed"
+    else if (hubPos >= OPEN_AT_OR_ABOVE)  shadeState = "open"
+    else                                  shadeState = "partially open"
 
     logInfo "settled: position=${hubPos} shade=${shadeState}"
     sendEvent(name: "windowShade", value: shadeState)
@@ -414,6 +427,26 @@ private handleBatteryReport(Map descMap) {
     Integer pct = clamp((raw / 2) as Integer, 0, 100)
     logInfo "battery=${pct}%"
     sendEvent(name: "battery", value: pct, unit: "%")
+}
+
+private handleVelocityReport(Map descMap) {
+    if (descMap.value == null) return
+    // Velocity (0x0014) is a uint16 motor-speed percentage (0–100), set in the SOMA app.
+    // It is effectively read-only over Zigbee: ZCL writes ack SUCCESS but do not change the
+    // motor (confirmed by travel-time tests), so we only report it. Hubitat presents
+    // descMap.value already byte-swapped, so parsing it as hex yields the decimal directly.
+    Integer pct = clamp(Integer.parseInt(descMap.value, 16) & 0xFFFF, 0, 100)
+    logInfo "motorSpeed=${pct}% (configured in SOMA app; read-only over Zigbee)"
+    sendEvent(name: "motorSpeed", value: pct, unit: "%")
+}
+
+// lastCheckin is throttled to at most once per minute: parse() runs on every received
+// frame (a burst during travel), and Hubitat already tracks "Last Activity" natively.
+private void updateLastCheckin() {
+    Long nowMs = now()
+    if (state.lastCheckinMs != null && (nowMs - (state.lastCheckinMs as Long)) < 60000L) return
+    state.lastCheckinMs = nowMs
+    sendEvent(name: "lastCheckin", value: new Date().format("yyyy-MM-dd HH:mm:ss"))
 }
 
 // ---------- logging helpers ----------

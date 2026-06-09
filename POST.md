@@ -24,7 +24,7 @@ If your motor reports a different manufacturer string, please post the fingerpri
 - **True mid-travel motion state** — `windowShade` is held at `opening` / `closing` for the entire travel, not just at the moment a command is issued. Dashboards and Rule Machine can react to "shade is currently moving".
 - **Target-announcement suppression** — SOMA motors echo the commanded target back as a position report *before* the motor physically moves (so `position` instantly jumps to the target, then back to the real position). This is suppressed so your `position` attribute never flaps.
 - **ZCL Default Response decoding** — every command is acked with a human-readable log line (e.g. `ack: Close -> SUCCESS`), which makes debugging much easier.
-- **Motion inference from either direction** — if the device supports the `OperationalStatus` (0x0017) attribute, that's the authoritative signal. If it doesn't (current SOMA firmware doesn't), direction is inferred from position deltas, so physical / SOMA-app-initiated motion is also tracked.
+- **Motion inference from position reports** — the Zigbee Window Covering cluster has no motion-status attribute, so direction is inferred from the streamed position reports. Physical pulls and SOMA-app-initiated moves are tracked too, not just hub commands.
 - **Settle timer** — `windowShade` is finalized to `open` / `closed` / `partially open` after motion stops, using configurable thresholds.
 - **Battery reporting** — via the standard `Battery` capability.
 - **Position inversion toggle** — for motors mounted backwards.
@@ -53,8 +53,6 @@ On the device page, click **Get Info**, then open the top-nav **Logs** page. The
 ## Preferences
 
 - **Invert position** — flip if the motor reports backwards.
-- **Closed threshold** (default 2%) — Hubitat position at or below this reports as `closed`.
-- **Open threshold** (default 98%) — Hubitat position at or above this reports as `open`.
 - **Battery report interval** (60–1440 min, default 60) — max minutes between unsolicited battery reports. The device-side minimum is 1 hour.
 - **Motion settle timeout** (1–30 s, default 3) — seconds after the last position report before `windowShade` is finalized.
 - **Descriptive text logging** — human-readable `info` lines.
@@ -71,6 +69,8 @@ On the device page, click **Get Info**, then open the top-nav **Logs** page. The
 | `startPositionChange("open"\|"close")` | Begin motion in a direction |
 | `stopPositionChange` | Halt mid-travel |
 | `refresh` | Re-read position + battery |
+| `identify(seconds=30)` | Blink / buzz / jog the motor to locate it (firmware-dependent) |
+| `readSettings` | Read device-side settings (speed / mode / limits / voltage) to the log; updates `motorSpeed` |
 | `configure` | Re-bind and re-configure reporting |
 
 ## How it works
