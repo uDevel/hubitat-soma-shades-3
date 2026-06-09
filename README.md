@@ -23,7 +23,7 @@ On the device page, run **Get Info** and open **Logs**. If the `manufacturer` st
 - `startPositionChange("open"|"close")`
 - `identify(seconds=30)` — tell the motor to reveal itself (blink / buzz / jog — varies by firmware). Useful when multiple SOMA shades are paired. Default duration 30 s, range 1–255.
 - `refresh` — re-reads position and battery
-- `readSettings` — reads the device-side settings (speed, mode, limits, battery voltage) to the log and updates the `motorSpeed` attribute
+- `readSettings` — reads the device-side settings and decodes them to the log (config status, mode, lift limits); also updates the `motorSpeed`, `batteryVoltage`, and `coveringType` attributes
 
 ## Motion tracking (opening / closing)
 
@@ -110,7 +110,12 @@ For reference when debugging pairing or writing related drivers.
 |---|---|---|---|
 | `0x0102` | `0x0008` | currentPositionLiftPercentage | uint8, ZCL convention (inverted from Hubitat) |
 | `0x0102` | `0x0014` | velocity | uint16, app-configured motor speed % (read-only) → `motorSpeed` |
+| `0x0102` | `0x0000` | windowCoveringType | enum8 → `coveringType` attribute |
+| `0x0102` | `0x0007` | configStatus | bitmap8, decoded to the log (operational / online / encoder / reversed) |
+| `0x0102` | `0x0010`,`0x0011` | installedOpen/ClosedLimitLift | uint16, logged (diagnostics) |
+| `0x0102` | `0x0017` | mode | bitmap8, decoded to the log (LED / reversed / calibration) |
 | `0x0001` | `0x0021` | batteryPercentageRemaining | uint8 in half-percent units (divide by 2) |
+| `0x0001` | `0x0020` | batteryVoltage | uint8 ×100 mV → `batteryVoltage` attribute (volts) |
 
 ## License
 

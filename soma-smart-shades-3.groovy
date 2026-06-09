@@ -13,7 +13,7 @@
 
 import groovy.transform.Field
 
-@Field static final String DRIVER_VERSION = "1.2.0"
+@Field static final String DRIVER_VERSION = "1.2.1"
 
 @Field static final Integer CLUSTER_BASIC          = 0x0000
 @Field static final Integer CLUSTER_POWER          = 0x0001
@@ -21,8 +21,14 @@ import groovy.transform.Field
 @Field static final Integer CLUSTER_WINDOW_COVER   = 0x0102
 
 @Field static final Integer ATTR_BATTERY_PERCENT   = 0x0021
+@Field static final Integer ATTR_BATTERY_VOLTAGE   = 0x0020
 @Field static final Integer ATTR_LIFT_PERCENT      = 0x0008
 @Field static final Integer ATTR_VELOCITY          = 0x0014
+@Field static final Integer ATTR_WC_TYPE           = 0x0000
+@Field static final Integer ATTR_WC_CONFIG_STATUS  = 0x0007
+@Field static final Integer ATTR_WC_OPEN_LIMIT     = 0x0010
+@Field static final Integer ATTR_WC_CLOSED_LIMIT   = 0x0011
+@Field static final Integer ATTR_WC_MODE           = 0x0017
 
 @Field static final Integer CMD_OPEN               = 0x00
 @Field static final Integer CMD_CLOSE              = 0x01
@@ -36,6 +42,14 @@ import groovy.transform.Field
 // exact 0/100, so a 1% margin is plenty to absorb a rare off-by-one stop.
 @Field static final Integer CLOSED_AT_OR_BELOW      = 1
 @Field static final Integer OPEN_AT_OR_ABOVE        = 99
+
+// ZCL Window Covering type enum (attr 0x0000) → human-readable name.
+@Field static final Map<Integer, String> WC_TYPE_NAMES = [
+    0: "Roller Shade", 1: "Roller Shade (2 motor)", 2: "Roller Shade (exterior)",
+    3: "Roller Shade (exterior, 2 motor)", 4: "Drapery", 5: "Awning",
+    6: "Shutter", 7: "Tilt Blind (tilt only)", 8: "Tilt Blind (lift & tilt)",
+    9: "Projector Screen"
+]
 
 metadata {
     definition(
@@ -54,6 +68,8 @@ metadata {
 
         attribute "lastCheckin", "string"
         attribute "motorSpeed", "number"
+        attribute "batteryVoltage", "number"
+        attribute "coveringType", "string"
 
         command "identify", [[name: "seconds", type: "NUMBER",
                               description: "Identify duration in seconds (1-255). Default 30."]]
@@ -181,9 +197,10 @@ def identify(seconds = 30) {
     ])
 }
 
-// Diagnostic: read the device-side settings the device never reports unsolicited.
-// With Trace logging on, each response is a `parse map:` line; attributes without a
-// dedicated handler land in `unhandled:`. Velocity (0x0014) updates the motorSpeed attribute.
+// Diagnostic: read the device-side settings the device never reports unsolicited
+// (type, config status, lift limits, velocity, mode, battery voltage). Each has a parse
+// handler that decodes it to the log; velocity, type, and battery voltage also update the
+// motorSpeed, coveringType, and batteryVoltage attributes.
 def readSettings() {
     logInfo "readSettings()"
     String dni = device.deviceNetworkId
@@ -275,9 +292,14 @@ def configure() {
     cmds += refreshPositionCmd()
     cmds += "delay 200"
     cmds += refreshBatteryCmd()
+    // Populate the read-only status attributes so they show after Configure:
+    // motorSpeed (0x0014), batteryVoltage (0x0020), coveringType (0x0000).
     cmds += "delay 200"
-    // motorSpeed status (app-configured speed; read-only over Zigbee)
     cmds += "he rattr 0x${device.deviceNetworkId} ${SOMA_ENDPOINT} 0x0102 0x0014 {}"
+    cmds += "delay 200"
+    cmds += "he rattr 0x${device.deviceNetworkId} ${SOMA_ENDPOINT} 0x0001 0x0020 {}"
+    cmds += "delay 200"
+    cmds += "he rattr 0x${device.deviceNetworkId} ${SOMA_ENDPOINT} 0x0102 0x0000 {}"
 
     sendEvent(name: "checkInterval", value: batteryMaxSec * 2 + 600,
               data: [protocol: "zigbee", hubHardwareId: device.hub.hardwareID])
@@ -339,8 +361,23 @@ def parse(String description) {
     if (cluster == CLUSTER_WINDOW_COVER && attr == ATTR_VELOCITY) {
         return handleVelocityReport(descMap)
     }
+    if (cluster == CLUSTER_WINDOW_COVER && attr == ATTR_WC_TYPE) {
+        return handleCoveringType(descMap)
+    }
+    if (cluster == CLUSTER_WINDOW_COVER && attr == ATTR_WC_CONFIG_STATUS) {
+        return handleConfigStatus(descMap)
+    }
+    if (cluster == CLUSTER_WINDOW_COVER && (attr == ATTR_WC_OPEN_LIMIT || attr == ATTR_WC_CLOSED_LIMIT)) {
+        return handleInstalledLimit(attr, descMap)
+    }
+    if (cluster == CLUSTER_WINDOW_COVER && attr == ATTR_WC_MODE) {
+        return handleMode(descMap)
+    }
     if (cluster == CLUSTER_POWER && attr == ATTR_BATTERY_PERCENT) {
         return handleBatteryReport(descMap)
+    }
+    if (cluster == CLUSTER_POWER && attr == ATTR_BATTERY_VOLTAGE) {
+        return handleBatteryVoltage(descMap)
     }
     if (cluster == CLUSTER_BASIC) {
         logDebug "Basic cluster attr ${descMap.attrId} = ${descMap.value}"
@@ -438,6 +475,58 @@ private handleVelocityReport(Map descMap) {
     Integer pct = clamp(Integer.parseInt(descMap.value, 16) & 0xFFFF, 0, 100)
     logInfo "motorSpeed=${pct}% (configured in SOMA app; read-only over Zigbee)"
     sendEvent(name: "motorSpeed", value: pct, unit: "%")
+}
+
+private handleCoveringType(Map descMap) {
+    if (descMap.value == null) return
+    Integer t = Integer.parseInt(descMap.value, 16) & 0xFF
+    String name = WC_TYPE_NAMES.containsKey(t) ? WC_TYPE_NAMES[t] : "Type ${t}"
+    logInfo "coveringType=${name}"
+    sendEvent(name: "coveringType", value: name)
+}
+
+private handleConfigStatus(Map descMap) {
+    if (descMap.value == null) return
+    Integer s = Integer.parseInt(descMap.value, 16) & 0xFF
+    List<String> flags = []
+    if ((s & 0x01) != 0) flags << "operational"
+    if ((s & 0x02) != 0) flags << "online"
+    flags << (((s & 0x04) != 0) ? "commands reversed" : "commands normal")
+    if ((s & 0x08) != 0) flags << "lift closed-loop"
+    if ((s & 0x20) != 0) flags << "lift encoder"
+    logInfo "configStatus=0x${String.format('%02X', s)} (${flags.join(', ')})"
+}
+
+private handleInstalledLimit(Integer attr, Map descMap) {
+    if (descMap.value == null) return
+    Integer v = Integer.parseInt(descMap.value, 16) & 0xFFFF
+    String which = (attr == ATTR_WC_OPEN_LIMIT) ? "open" : "closed"
+    logInfo "installedLimit(${which})=${v}"
+}
+
+private handleMode(Map descMap) {
+    if (descMap.value == null) return
+    Integer m = Integer.parseInt(descMap.value, 16) & 0xFF
+    List<String> flags = []
+    if ((m & 0x01) != 0) flags << "reversed"
+    if ((m & 0x02) != 0) flags << "calibration"
+    if ((m & 0x04) != 0) flags << "maintenance"
+    if ((m & 0x08) != 0) flags << "LED on"
+    String detail = flags ? " (${flags.join(', ')})" : ""
+    logInfo "mode=0x${String.format('%02X', m)}${detail}"
+}
+
+private handleBatteryVoltage(Map descMap) {
+    if (descMap.value == null) return
+    Integer raw = Integer.parseInt(descMap.value, 16) & 0xFF
+    if (raw == 0xFF) {
+        logDebug "batteryVoltage: 0xFF (unknown), ignoring"
+        return
+    }
+    // ZCL BatteryVoltage (0x0020) is in 100 mV units
+    BigDecimal volts = raw / 10.0
+    logInfo "batteryVoltage=${volts}V"
+    sendEvent(name: "batteryVoltage", value: volts, unit: "V")
 }
 
 // lastCheckin is throttled to at most once per minute: parse() runs on every received
