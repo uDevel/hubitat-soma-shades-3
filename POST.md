@@ -5,7 +5,7 @@
 
 ---
 
-SOMA pushed a firmware update that lets the **SOMA Smart Shades 3** motor join a Zigbee 3.0 network directly — no more SOMA Connect bridge required. Hubitat's built-in **Generic Zigbee Shade** driver mostly works, but it doesn't handle the motor's quirks around target-position echoes, does not hold `opening` / `closing` through travel, and doesn't decode the ZCL Default Response acks.
+SOMA pushed a firmware update that lets the **SOMA Smart Shades 3** motor join a Zigbee 3.0 network directly — no more SOMA Connect bridge required. Hubitat's built-in **Generic Zigbee Shade** driver mostly works, but the position value tends to jump around while the shade moves, and it doesn't keep the tile on `opening` / `closing` through the whole travel.
 
 This is a purpose-built driver that fixes all of that.
 
@@ -20,19 +20,23 @@ If your motor reports a different manufacturer string, please post the fingerpri
 
 ## Features
 
-- **Full `WindowShade` capability** — `open`, `close`, `setPosition(0–100)`, `startPositionChange`, `stopPositionChange`, `refresh`.
-- **True mid-travel motion state** — `windowShade` is held at `opening` / `closing` for the entire travel, not just at the moment a command is issued. Dashboards and Rule Machine can react to "shade is currently moving".
-- **Target-announcement suppression** — SOMA motors echo the commanded target back as a position report *before* the motor physically moves (so `position` instantly jumps to the target, then back to the real position). This is suppressed so your `position` attribute never flaps.
-- **ZCL Default Response decoding** — every command is acked with a human-readable log line (e.g. `ack: Close -> SUCCESS`), which makes debugging much easier.
-- **Motion inference from position reports** — the Zigbee Window Covering cluster has no motion-status attribute, so direction is inferred from the streamed position reports. Physical pulls and SOMA-app-initiated moves are tracked too, not just hub commands.
-- **Settle timer** — `windowShade` is finalized to `open` / `closed` / `partially open` after motion stops, using configurable thresholds.
-- **Battery reporting** — via the standard `Battery` capability.
-- **Position inversion toggle** — for motors mounted backwards.
-- **Tri-level logging** — descriptive text, debug, and "trace" (all-at-INFO for easier filter capture).
+- **Full shade control** — `open`, `close`, set to any position (0–100%), start/stop, and refresh.
+- **Live movement status** — the tile shows `opening` / `closing` the whole time the shade is moving, not just when you press the button, so dashboards and Rule Machine can react while it's in motion.
+- **Instant final status** — when a move finishes, the tile updates to `open` / `closed` / `partially open` right away.
+- **Rock-steady position** — no flickering or jumping in the position value while the shade moves. Physical pulls and moves made from the SOMA app are tracked too, not just commands from Hubitat.
+- **Clear logs** — every command is confirmed in the log (e.g. `ack: Close -> SUCCESS`), which makes troubleshooting easy.
+- **Extra info on the device page** — motor speed (as set in the SOMA app), battery voltage, and shade type.
+- **Battery level** — via the standard `Battery` capability.
+- **Invert-position toggle** — for shades mounted in reverse.
+- **Three logging levels** — descriptive, debug, and trace, for easy troubleshooting.
 
 ## Installation
 
-**Option A — Hubitat Package Manager (recommended once listed).** Not yet submitted — I'll update this post when it's in HPM.
+**Option A — Hubitat Package Manager (recommended).** In HPM, choose **Install → From a URL** and paste the package manifest:
+```
+https://raw.githubusercontent.com/uDevel/hubitat-soma-shades-3/main/packageManifest.json
+```
+After that, HPM offers updates automatically under **Update**. (If you've added my repository to HPM, it'll also turn up in keyword search.)
 
 **Option B — Manual install (works today):**
 
@@ -52,45 +56,45 @@ On the device page, click **Get Info**, then open the top-nav **Logs** page. The
 
 ## Preferences
 
-- **Invert position** — flip if the motor reports backwards.
-- **Battery report interval** (60–1440 min, default 60) — max minutes between unsolicited battery reports. The device-side minimum is 1 hour.
-- **Motion settle timeout** (1–30 s, default 3) — seconds after the last position report before `windowShade` is finalized.
-- **Descriptive text logging** — human-readable `info` lines.
-- **Debug logging** — parsed Zigbee maps and outgoing `he cmd` dumps. Auto-disables 30 min after save.
-- **Trace logging** — same as debug but routed to `INFO` so it bypasses log-level filtering; outgoing commands get one line each.
+- **Invert position** — flip if your shade reports open when it's actually closed.
+- **Battery report interval** (60–1440 min, default 60) — how often the shade reports its battery level. The shade's own minimum is 1 hour.
+- **Motion settle timeout** (1–30 s, default 3) — how long to wait after movement stops before locking in the final status.
+- **Descriptive text logging** — readable status lines.
+- **Debug logging** — extra detail; turns itself off after 30 minutes.
+- **Trace logging** — deepest detail, for troubleshooting.
 
 ## Commands
 
-| Command | Description |
+| Command | What it does |
 |---|---|
-| `open` | Fully open |
-| `close` | Fully close |
-| `setPosition(0–100)` | 0 = closed, 100 = open (Hubitat convention) |
-| `startPositionChange("open"\|"close")` | Begin motion in a direction |
-| `stopPositionChange` | Halt mid-travel |
-| `refresh` | Re-read position + battery |
-| `identify(seconds=30)` | Blink / buzz / jog the motor to locate it (firmware-dependent) |
-| `readSettings` | Read device-side settings (speed / mode / limits / voltage) to the log; updates `motorSpeed` |
-| `configure` | Re-bind and re-configure reporting |
+| `open` | Fully open the shade |
+| `close` | Fully close the shade |
+| `setPosition(0–100)` | Move to a specific position (0 = closed, 100 = open) |
+| `startPositionChange("open"\|"close")` | Start moving in a direction |
+| `stopPositionChange` | Stop the shade mid-move |
+| `identify(seconds=30)` | Make the motor reveal itself (blink / buzz / jog) — handy when you have several shades |
+| `readSettings` | Pull the shade's current settings into the logs |
+| `refresh` | Re-read position and battery |
+| `configure` | Sets up the shade's reporting — click once after pairing |
 
 ## How it works
 
-A typical close cycle from position 76 now logs like this:
+A typical close from 76% logs like this (with descriptive logging on):
 
 ```
 close()
---> close outgoing: [he cmd 0x... 0x0A 0x0102 1 {}, delay 300, he rattr ...]
 ack: Close -> SUCCESS
-target announcement: ZCL 100 hubPos=0 (suppressed)
-moving: position=74 (ZCL 26)
-moving: position=66 (ZCL 34)
-moving: position=57 (ZCL 43)
+target announcement: hubPos=0 (suppressed)
+moving: position=74
+moving: position=66
+moving: position=57
 ...
-moving: position=0 (ZCL 100)
+moving: position=0
+reached target 0 — finalizing
 settled: position=0 shade=closed
 ```
 
-The `target announcement: ... (suppressed)` line is the key difference from a generic driver — without suppression, `position` jumps `76 → 0 → 74 → 66 …` which makes dashboards blink and breaks "shade is at 50%" automations.
+The `target announcement: ... (suppressed)` line is the key difference from the generic driver. The motor briefly reports the *target* before it actually moves; without suppression the position would jump `76 → 0 → 74 → 66 …`, which makes dashboard tiles blink and trips up "shade is at 50%" automations. The `reached target` line is the new instant-finalize — the tile shows `closed` the moment it arrives.
 
 ## Source code
 
@@ -107,4 +111,4 @@ Issues, feature requests, and fingerprint contributions are welcome on GitHub Is
 
 ---
 
-*First public release. Tested on SOMA Smart Shades 3 firmware `3.0.17+0` (ZCL v8, HW v5) on a Hubitat C-7.*
+*Current version: 1.2.1. Tested on SOMA Smart Shades 3 firmware `3.0.17+0` on a Hubitat C-7.*
